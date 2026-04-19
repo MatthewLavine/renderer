@@ -61,7 +61,7 @@ func initializeWindow() bool {
 		sdl.WINDOWPOS_CENTERED,
 		WindowWidth,
 		WindowHeight,
-		sdl.WINDOW_SHOWN,
+		sdl.WINDOW_SHOWN | sdl.WINDOW_RESIZABLE,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating SDL Window: %v\n", err)
@@ -73,6 +73,11 @@ func initializeWindow() bool {
 		fmt.Fprintf(os.Stderr, "Error creating SDL Renderer: %v\n", err)
 		return false
 	}
+
+	// Set a logical resolution for the renderer. 
+	// This automatically handles letterboxing and maintains our 16:9 aspect ratio 
+	// no matter how the user resizes the window.
+	renderer.SetLogicalSize(int32(WindowWidth), int32(WindowHeight))
 
 	texture, err = renderer.CreateTexture(
 		sdl.PIXELFORMAT_ARGB8888,

@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	WindowWidth  = 1280
-	WindowHeight = 720
+	WindowWidth  = 1600
+	WindowHeight = 900
 )
 
 var colorBuffer []uint32
