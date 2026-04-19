@@ -16,6 +16,16 @@ var (
 	running  bool
 )
 
+type RenderMethod int
+
+const (
+	RenderWireframe RenderMethod = iota
+	RenderSolid
+	RenderSolidWireframe
+)
+
+var renderMethod = RenderSolidWireframe
+
 // Project takes a 3D point and squashes it onto a 2D plane (Perspective)
 func Project(point Vec3) Vec2 {
 	fovFactor := 640.0 // Controls how strong the perspective distortion is
@@ -82,8 +92,17 @@ func processInput() {
 		case *sdl.QuitEvent:
 			running = false
 		case *sdl.KeyboardEvent:
-			if e.Keysym.Sym == sdl.K_ESCAPE {
-				running = false
+			if e.Type == sdl.KEYDOWN {
+				switch e.Keysym.Sym {
+				case sdl.K_ESCAPE:
+					running = false
+				case sdl.K_1:
+					renderMethod = RenderWireframe
+				case sdl.K_2:
+					renderMethod = RenderSolid
+				case sdl.K_3:
+					renderMethod = RenderSolidWireframe
+				}
 			}
 		}
 	}
@@ -147,10 +166,12 @@ func update() {
 		// 3. Calculate dot product
 		dot := normal.Dot(cameraRay)
 
-		// If dot > 0, the face is pointing away from the camera (in our left-handed system)
-		// We might need to flip this if it culls front faces!
-		if dot > 0 {
-			continue
+		// If dot > 0, the face is pointing away from the camera
+		// We bypass culling if we are in pure Wireframe mode so we can see through the model
+		if renderMethod != RenderWireframe {
+			if dot > 0 {
+				continue
+			}
 		}
 
 		var projectedPoints [3]Vec2
@@ -188,21 +209,30 @@ func update() {
 
 	// Render all sorted triangles
 	for _, t := range trianglesToRender {
-		// Draw the solid, filled triangle
-		DrawFilledTriangle(
-			int(t.Points[0].X), int(t.Points[0].Y),
-			int(t.Points[1].X), int(t.Points[1].Y),
-			int(t.Points[2].X), int(t.Points[2].Y),
-			t.Color,
-		)
+		if renderMethod == RenderSolid || renderMethod == RenderSolidWireframe {
+			// Draw the solid, filled triangle
+			DrawFilledTriangle(
+				int(t.Points[0].X), int(t.Points[0].Y),
+				int(t.Points[1].X), int(t.Points[1].Y),
+				int(t.Points[2].X), int(t.Points[2].Y),
+				t.Color,
+			)
+		}
 
-		// Draw the wireframe outline on top in dark gray so we can see the edges
-		DrawTriangle(
-			int(t.Points[0].X), int(t.Points[0].Y),
-			int(t.Points[1].X), int(t.Points[1].Y),
-			int(t.Points[2].X), int(t.Points[2].Y),
-			0xFF111111,
-		)
+		if renderMethod == RenderWireframe || renderMethod == RenderSolidWireframe {
+			wireColor := uint32(0xFF111111) // Dark gray default
+			if renderMethod == RenderWireframe {
+				wireColor = 0xFFFFFFFF // White for visibility on dark background
+			}
+
+			// Draw the wireframe outline
+			DrawTriangle(
+				int(t.Points[0].X), int(t.Points[0].Y),
+				int(t.Points[1].X), int(t.Points[1].Y),
+				int(t.Points[2].X), int(t.Points[2].Y),
+				wireColor,
+			)
+		}
 	}
 }
 
@@ -239,9 +269,18 @@ func main() {
 		updateDuration := time.Since(updateStart)
 
 		// Draw Statistics Overlay
+		var modeStr string
+		switch renderMethod {
+		case RenderWireframe:
+			modeStr = "Wireframe"
+		case RenderSolid:
+			modeStr = "Solid"
+		case RenderSolidWireframe:
+			modeStr = "Solid + Wireframe"
+		}
 		stats := fmt.Sprintf(
-			"Update Time: %d us\nFPS: %.1f\nVertices: %d\nFaces: %d",
-			updateDuration.Microseconds(), lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces),
+			"Update Time: %d us\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1,2,3)",
+			updateDuration.Microseconds(), lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces), modeStr,
 		)
 		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
 
