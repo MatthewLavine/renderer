@@ -46,7 +46,7 @@ func ApplyLightIntensity(baseColor uint32, intensity float64) uint32 {
 	return (a << 24) | (uint32(r) << 16) | (uint32(g) << 8) | uint32(b)
 }
 
-// Project function removed, we now use Mat4Projection from matrix.go 
+// Project function removed, we now use Mat4Projection from matrix.go
 
 func initializeWindow() bool {
 	if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -61,7 +61,7 @@ func initializeWindow() bool {
 		sdl.WINDOWPOS_CENTERED,
 		WindowWidth,
 		WindowHeight,
-		sdl.WINDOW_SHOWN | sdl.WINDOW_RESIZABLE,
+		sdl.WINDOW_SHOWN|sdl.WINDOW_RESIZABLE,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating SDL Window: %v\n", err)
@@ -74,8 +74,8 @@ func initializeWindow() bool {
 		return false
 	}
 
-	// Set a logical resolution for the renderer. 
-	// This automatically handles letterboxing and maintains our 16:9 aspect ratio 
+	// Set a logical resolution for the renderer.
+	// This automatically handles letterboxing and maintains our 16:9 aspect ratio
 	// no matter how the user resizes the window.
 	renderer.SetLogicalSize(int32(WindowWidth), int32(WindowHeight))
 
@@ -118,7 +118,7 @@ func setup() {
 				Mesh:        teapotMesh,
 				Rotation:    Vec3{X: 0, Y: 0, Z: 0},
 				Scale:       Vec3{X: 1, Y: 1, Z: 1},
-				Translation: Vec3{X: float64(x) * 5.0, Y: (float64(y) * 5.0) - 1.5, Z: 15},
+				Translation: Vec3{X: float64(x) * 7.0, Y: (float64(y) * 5.0) - 1.5, Z: 15},
 			}
 			scene = append(scene, entity)
 		}
@@ -155,7 +155,7 @@ func processInput() {
 	}
 
 	keys := sdl.GetKeyboardState()
-	
+
 	moveSpeed := 0.2
 	turnSpeed := 0.02
 
@@ -176,7 +176,7 @@ func processInput() {
 	if keys[sdl.SCANCODE_D] == 1 {
 		globalCamera.Position = globalCamera.Position.Add(right.Mult(moveSpeed))
 	}
-	
+
 	// Vertical Movement (Q/E)
 	if keys[sdl.SCANCODE_Q] == 1 {
 		globalCamera.Position.Y += moveSpeed
