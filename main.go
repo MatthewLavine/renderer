@@ -376,7 +376,6 @@ func main() {
 	setup()
 
 	var lastFPS float64
-	targetFrameTime := 1.0 / 60.0 // Exactly 60 FPS (approx 0.0166667 seconds)
 	perfFreq := float64(sdl.GetPerformanceFrequency())
 
 	for running {
@@ -420,20 +419,6 @@ func main() {
 		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
 
 		render()
-
-		// Precise Frame Pacing
-		elapsed := float64(sdl.GetPerformanceCounter()-frameStart) / perfFreq
-		if elapsed < targetFrameTime {
-			timeToWait := targetFrameTime - elapsed
-			// Ask the OS to sleep for the bulk of the time to save CPU, but leave ~2ms buffer
-			if timeToWait > 0.002 {
-				sdl.Delay(uint32((timeToWait - 0.002) * 1000.0))
-			}
-			// Busy-wait the remaining fraction of a millisecond for perfect precision
-			for float64(sdl.GetPerformanceCounter()-frameStart)/perfFreq < targetFrameTime {
-				// Spin
-			}
-		}
 
 		// Calculate total frame time and FPS
 		frameTime := float64(sdl.GetPerformanceCounter()-frameStart) / perfFreq
