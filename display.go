@@ -13,11 +13,19 @@ const (
 )
 
 var colorBuffer []uint32
+var zBuffer []float64
 
 // ClearColorBuffer fills the entire screen with a single solid color
 func ClearColorBuffer(color uint32) {
 	for i := range colorBuffer {
 		colorBuffer[i] = color
+	}
+}
+
+// ClearZBuffer resets the depth buffer to the far plane (1.0)
+func ClearZBuffer() {
+	for i := range zBuffer {
+		zBuffer[i] = 1.0
 	}
 }
 
@@ -72,74 +80,67 @@ func DrawTriangle(x0, y0, x1, y1, x2, y2 int, color uint32) {
 	DrawLine(x2, y2, x0, y0, color)
 }
 
-// DrawFilledTriangle draws a solid, filled triangle using the flat-top/flat-bottom scanline algorithm
-func DrawFilledTriangle(x0, y0, x1, y1, x2, y2 int, color uint32) {
-	// 1. Sort the vertices by y-coordinate ascending (y0 <= y1 <= y2)
-	if y0 > y1 {
-		y0, y1 = y1, y0
-		x0, x1 = x1, x0
+// DrawFilledTriangle draws a solid, filled triangle using Barycentric coordinates.
+// It features perfect screen clamping and Z-Buffering.
+func DrawFilledTriangle(v0, v1, v2 Vec3, color uint32) {
+	// 1. Find the bounding box of the triangle on the screen
+	minX := int(math.Floor(math.Min(v0.X, math.Min(v1.X, v2.X))))
+	maxX := int(math.Ceil(math.Max(v0.X, math.Max(v1.X, v2.X))))
+	minY := int(math.Floor(math.Min(v0.Y, math.Min(v1.Y, v2.Y))))
+	maxY := int(math.Ceil(math.Max(v0.Y, math.Max(v1.Y, v2.Y))))
+
+	// 2. Screen Clamping!
+	// This entirely prevents the massive framerate drops by guaranteeing we NEVER
+	// loop over pixels that are outside the physical screen boundaries.
+	if minX < 0 { minX = 0 }
+	if maxX >= WindowWidth { maxX = WindowWidth - 1 }
+	if minY < 0 { minY = 0 }
+	if maxY >= WindowHeight { maxY = WindowHeight - 1 }
+
+	// Calculate the total area of the triangle for barycentric division
+	area := edgeCrossProduct(v0, v1, v2)
+	
+	// If area is 0, it's a degenerate line/point, don't draw
+	if area == 0 {
+		return
 	}
-	if y1 > y2 {
-		y1, y2 = y2, y1
-		x1, x2 = x2, x1
-	}
-	if y0 > y1 {
-		y0, y1 = y1, y0
-		x0, x1 = x1, x0
-	}
 
-	if y1 == y2 {
-		// Draw flat-bottom triangle
-		fillFlatBottomTriangle(x0, y0, x1, y1, x2, y2, color)
-	} else if y0 == y1 {
-		// Draw flat-top triangle
-		fillFlatTopTriangle(x0, y0, x1, y1, x2, y2, color)
-	} else {
-		// Split the triangle into a flat-bottom and a flat-top triangle
-		// Calculate the new vertex (Mx, My)
-		My := y1
-		Mx := ((x2-x0)*(y1-y0))/(y2-y0) + x0
-
-		fillFlatBottomTriangle(x0, y0, x1, y1, Mx, My, color)
-		fillFlatTopTriangle(x1, y1, Mx, My, x2, y2, color)
-	}
-}
-
-func fillFlatBottomTriangle(x0, y0, x1, y1, x2, y2 int, color uint32) {
-	// Calculate the inverse slopes (how much x changes for each 1 unit of y)
-	invSlope1 := float64(x1-x0) / float64(y1-y0)
-	invSlope2 := float64(x2-x0) / float64(y2-y0)
-
-	xStart := float64(x0)
-	xEnd := float64(x0)
-
-	// Loop scanlines from top to bottom
-	for y := y0; y <= y2; y++ {
-		drawHorizontalLine(int(xStart), int(xEnd), y, color)
-		xStart += invSlope1
-		xEnd += invSlope2
-	}
-}
-
-func fillFlatTopTriangle(x0, y0, x1, y1, x2, y2 int, color uint32) {
-	invSlope1 := float64(x2-x0) / float64(y2-y0)
-	invSlope2 := float64(x2-x1) / float64(y2-y1)
-
-	xStart := float64(x0)
-	xEnd := float64(x1)
-
-	for y := y0; y <= y2; y++ {
-		drawHorizontalLine(int(xStart), int(xEnd), y, color)
-		xStart += invSlope1
-		xEnd += invSlope2
+	// 3. Loop over only the pixels inside the clamped bounding box
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			p := Vec3{X: float64(x), Y: float64(y), Z: 0}
+			
+			// Calculate barycentric weights
+			w0 := edgeCrossProduct(v1, v2, p)
+			w1 := edgeCrossProduct(v2, v0, p)
+			w2 := edgeCrossProduct(v0, v1, p)
+			
+			// Check if point is inside the triangle
+			// Depending on winding order, all weights will be either positive or negative
+			isInside := (w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)
+			
+			if isInside {
+				// Normalize weights
+				w0 /= area
+				w1 /= area
+				w2 /= area
+				
+				// Interpolate Z depth
+				z := w0*v0.Z + w1*v1.Z + w2*v2.Z
+				
+				idx := y*WindowWidth + x
+				
+				// Z-Buffer Depth Test! Only draw if this pixel is CLOSER than the current one
+				if z < zBuffer[idx] {
+					zBuffer[idx] = z
+					colorBuffer[idx] = color
+				}
+			}
+		}
 	}
 }
 
-func drawHorizontalLine(xStart, xEnd, y int, color uint32) {
-	if xStart > xEnd {
-		xStart, xEnd = xEnd, xStart
-	}
-	for x := xStart; x <= xEnd; x++ {
-		SetPixel(x, y, color)
-	}
+// edgeCrossProduct returns the 2D cross product to determine which side of an edge a point lies
+func edgeCrossProduct(a, b, c Vec3) float64 {
+	return (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X)
 }

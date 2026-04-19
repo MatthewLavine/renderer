@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -90,8 +89,9 @@ func initializeWindow() bool {
 }
 
 func setup() {
-	// Allocate memory for our custom color buffer
+	// Allocate memory for our custom color buffer and Z buffer
 	colorBuffer = make([]uint32, WindowWidth*WindowHeight)
+	zBuffer = make([]float64, WindowWidth*WindowHeight)
 
 	// Load our 3D mesh from disk
 	teapotMesh, err := LoadOBJ("assets/teapot.obj")
@@ -192,15 +192,16 @@ func processInput() {
 }
 
 // TriangleToRender holds projected 2D coordinates and depth information for Painter's algorithm
+// TriangleToRender holds projected 2D coordinates and depth information
 type TriangleToRender struct {
-	Points   [3]Vec2
-	Color    uint32
-	AvgDepth float64
+	Points [3]Vec3
+	Color  uint32
 }
 
 func update() {
-	// Clear the screen to a dark gray/black
+	// Clear the screen and the Z-buffer
 	ClearColorBuffer(0xFF111111)
+	ClearZBuffer()
 
 	var trianglesToRender []TriangleToRender
 
@@ -279,7 +280,7 @@ func update() {
 				continue
 			}
 
-			var projectedPoints [3]Vec2
+			var projectedPoints [3]Vec3
 
 			// Project each transformed vertex
 			for i, transformed := range transformedVertices {
@@ -289,16 +290,14 @@ func update() {
 
 				// 5. Scale Normalized Device Coordinates to Screen Space
 				// NDC has +Y pointing UP. Screen Space has +Y pointing DOWN.
-				projected2D := Vec2{
+				projected2D := Vec3{
 					X: (projected3D.X + 1.0) * 0.5 * float64(WindowWidth),
 					Y: (1.0 - projected3D.Y) * 0.5 * float64(WindowHeight),
+					Z: projected3D.Z, // Preserve NDC depth for Z-Buffering!
 				}
 
 				projectedPoints[i] = projected2D
 			}
-
-			// Calculate average depth for Painter's Algorithm
-			avgDepth := (transformedVertices[0].Z + transformedVertices[1].Z + transformedVertices[2].Z) / 3.0
 
 			// Calculate light intensity based on how directly the face points at the light
 			// We negate the dot product because light comes towards +Z and normal points towards -Z
@@ -317,29 +316,17 @@ func update() {
 			}
 
 			trianglesToRender = append(trianglesToRender, TriangleToRender{
-				Points:   projectedPoints,
-				Color:    color,
-				AvgDepth: avgDepth,
+				Points: projectedPoints,
+				Color:  color,
 			})
 		}
 	}
 
-	// --- Painter's Algorithm ---
-	// Sort the triangles by average depth (furthest away is drawn first)
-	sort.Slice(trianglesToRender, func(i, j int) bool {
-		return trianglesToRender[i].AvgDepth > trianglesToRender[j].AvgDepth
-	})
-
-	// Render all sorted triangles
+	// Render all triangles (NO SORTING REQUIRED thanks to Z-Buffer!)
 	for _, t := range trianglesToRender {
 		if renderMethod == RenderSolid || renderMethod == RenderSolidWireframe || renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
-			// Draw the solid, filled triangle
-			DrawFilledTriangle(
-				int(t.Points[0].X), int(t.Points[0].Y),
-				int(t.Points[1].X), int(t.Points[1].Y),
-				int(t.Points[2].X), int(t.Points[2].Y),
-				t.Color,
-			)
+			// Draw the solid, filled triangle with Z-Buffering
+			DrawFilledTriangle(t.Points[0], t.Points[1], t.Points[2], t.Color)
 		}
 
 		if renderMethod == RenderWireframe || renderMethod == RenderSolidWireframe || renderMethod == RenderShadedWireframe {
