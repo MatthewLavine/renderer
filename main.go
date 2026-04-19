@@ -195,7 +195,7 @@ func update() {
 			int(t.Points[2].X), int(t.Points[2].Y),
 			t.Color,
 		)
-		
+
 		// Draw the wireframe outline on top in dark gray so we can see the edges
 		DrawTriangle(
 			int(t.Points[0].X), int(t.Points[0].Y),
@@ -226,6 +226,8 @@ func main() {
 
 	setup()
 
+	var lastFPS float64
+
 	for running {
 		frameStart := sdl.GetTicks()
 
@@ -235,6 +237,13 @@ func main() {
 		updateStart := time.Now()
 		update()
 		updateDuration := time.Since(updateStart)
+
+		// Draw Statistics Overlay
+		stats := fmt.Sprintf(
+			"Update Time: %d us\nFPS: %.1f\nVertices: %d\nFaces: %d",
+			updateDuration.Microseconds(), lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces),
+		)
+		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
 
 		render()
 
@@ -247,14 +256,9 @@ func main() {
 		// Calculate total time taken for the entire frame (including delay)
 		frameTime := sdl.GetTicks() - frameStart
 
-		// Calculate frames per second
-		fps := 0.0
+		// Calculate frames per second for the NEXT frame
 		if frameTime > 0 {
-			fps = 1000.0 / float64(frameTime)
+			lastFPS = 1000.0 / float64(frameTime)
 		}
-
-		// Use \r to overwrite the same line in the terminal instead of scrolling
-		fmt.Printf("\rUpdate: %-5d µs | FPS: %-5.1f    ", updateDuration.Microseconds(), fps)
 	}
-	fmt.Println() // Print a final newline when the app exits
 }
