@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"time"
@@ -46,14 +47,7 @@ func ApplyLightIntensity(baseColor uint32, intensity float64) uint32 {
 	return (a << 24) | (uint32(r) << 16) | (uint32(g) << 8) | uint32(b)
 }
 
-// Project takes a 3D point and squashes it onto a 2D plane (Perspective)
-func Project(point Vec3) Vec2 {
-	fovFactor := 640.0 // Controls how strong the perspective distortion is
-	return Vec2{
-		X: (fovFactor * point.X) / point.Z,
-		Y: -(fovFactor * point.Y) / point.Z, // Negate Y so +Y goes UP the screen
-	}
-}
+// Project function removed, we now use Mat4Projection from matrix.go 
 
 func initializeWindow() bool {
 	if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -105,6 +99,13 @@ func setup() {
 		fmt.Fprintf(os.Stderr, "Error loading OBJ file: %v\n", err)
 	}
 
+	// Initialize the camera slightly backed off so we can see the scene
+	globalCamera = Camera{
+		Position: Vec3{X: 0, Y: 0, Z: -5},
+		Yaw:      0,
+		Pitch:    0,
+	}
+
 	// Create 9 teapots in a 3x3 grid
 	for x := -1; x <= 1; x++ {
 		for y := -1; y <= 1; y++ {
@@ -143,6 +144,51 @@ func processInput() {
 			}
 		}
 	}
+
+	keys := sdl.GetKeyboardState()
+	
+	moveSpeed := 0.2
+	turnSpeed := 0.02
+
+	// Calculate forward and right vectors based on camera's Yaw (Y rotation)
+	forward := Vec3{X: math.Sin(globalCamera.Yaw), Y: 0, Z: math.Cos(globalCamera.Yaw)}
+	right := Vec3{X: math.Cos(globalCamera.Yaw), Y: 0, Z: -math.Sin(globalCamera.Yaw)}
+
+	// WASD Movement
+	if keys[sdl.SCANCODE_W] == 1 {
+		globalCamera.Position = globalCamera.Position.Add(forward.Mult(moveSpeed))
+	}
+	if keys[sdl.SCANCODE_S] == 1 {
+		globalCamera.Position = globalCamera.Position.Sub(forward.Mult(moveSpeed))
+	}
+	if keys[sdl.SCANCODE_A] == 1 {
+		globalCamera.Position = globalCamera.Position.Sub(right.Mult(moveSpeed))
+	}
+	if keys[sdl.SCANCODE_D] == 1 {
+		globalCamera.Position = globalCamera.Position.Add(right.Mult(moveSpeed))
+	}
+	
+	// Vertical Movement (Q/E)
+	if keys[sdl.SCANCODE_Q] == 1 {
+		globalCamera.Position.Y += moveSpeed
+	}
+	if keys[sdl.SCANCODE_E] == 1 {
+		globalCamera.Position.Y -= moveSpeed
+	}
+
+	// Camera Rotation (Arrow Keys)
+	if keys[sdl.SCANCODE_UP] == 1 {
+		globalCamera.Pitch += turnSpeed
+	}
+	if keys[sdl.SCANCODE_DOWN] == 1 {
+		globalCamera.Pitch -= turnSpeed
+	}
+	if keys[sdl.SCANCODE_LEFT] == 1 {
+		globalCamera.Yaw -= turnSpeed
+	}
+	if keys[sdl.SCANCODE_RIGHT] == 1 {
+		globalCamera.Yaw += turnSpeed
+	}
 }
 
 // TriangleToRender holds projected 2D coordinates and depth information for Painter's algorithm
@@ -157,7 +203,13 @@ func update() {
 	ClearColorBuffer(0xFF111111)
 
 	var trianglesToRender []TriangleToRender
-	cameraPosition := Vec3{X: 0, Y: 0, Z: 0}
+
+	// 1. Calculate View Matrix based on the Camera's position and rotation
+	viewMatrix := Mat4View(globalCamera.Pitch, globalCamera.Yaw, globalCamera.Position)
+
+	// 2. Calculate Projection Matrix
+	aspectRatio := float64(WindowWidth) / float64(WindowHeight)
+	projMatrix := Mat4Projection(60.0, aspectRatio, 0.1, 100.0)
 
 	// Loop over all entities in the scene
 	for _, entity := range scene {
@@ -190,19 +242,24 @@ func update() {
 
 			var transformedVertices [3]Vec3
 
-			// Transform each vertex using the single World Matrix
+			// Transform each vertex
 			for i, vertex := range vertices {
-				transformedVertices[i] = Mat4MulVec3(worldMatrix, vertex)
+				// a. Transform into World Space
+				transformed := Mat4MulVec3(worldMatrix, vertex)
+				// b. Transform into View (Camera) Space
+				viewed := Mat4MulVec3(viewMatrix, transformed)
+				transformedVertices[i] = viewed
 			}
 
 			// --- Back-Face Culling ---
-			// 1. Calculate the face normal
+			// 1. Calculate the face normal (in View Space)
 			edge1 := transformedVertices[1].Sub(transformedVertices[0])
 			edge2 := transformedVertices[2].Sub(transformedVertices[0])
 			normal := edge1.Cross(edge2).Normalize()
 
-			// 2. Calculate the camera ray (vector from camera to the face)
-			cameraRay := transformedVertices[0].Sub(cameraPosition)
+			// 2. Calculate the camera ray
+			// Since we are in View Space, the camera is ALWAYS exactly at (0,0,0)!
+			cameraRay := transformedVertices[0].Sub(Vec3{X: 0, Y: 0, Z: 0})
 
 			// 3. Calculate dot product
 			dot := normal.Dot(cameraRay)
@@ -215,18 +272,29 @@ func update() {
 				}
 			}
 
+			// --- Near-Plane Culling ---
+			// If any vertex is behind the camera (Z < 0.1), discard the entire face to prevent
+			// Divide by Zero crashes and visual artifacts. (A perfect engine would clip the triangle instead)
+			if transformedVertices[0].Z < 0.1 || transformedVertices[1].Z < 0.1 || transformedVertices[2].Z < 0.1 {
+				continue
+			}
+
 			var projectedPoints [3]Vec2
 
 			// Project each transformed vertex
 			for i, transformed := range transformedVertices {
-				// 4. Project from 3D to 2D
-				projected := Project(transformed)
+				// 4. Project from 3D to 2D using Projection Matrix
+				// This converts View Space into Normalized Device Coordinates [-1, 1]
+				projected3D := Mat4MulVec4Project(projMatrix, transformed)
 
-				// 5. Center the projection on the screen
-				projected.X += float64(WindowWidth) / 2.0
-				projected.Y += float64(WindowHeight) / 2.0
+				// 5. Scale Normalized Device Coordinates to Screen Space
+				// NDC has +Y pointing UP. Screen Space has +Y pointing DOWN.
+				projected2D := Vec2{
+					X: (projected3D.X + 1.0) * 0.5 * float64(WindowWidth),
+					Y: (1.0 - projected3D.Y) * 0.5 * float64(WindowHeight),
+				}
 
-				projectedPoints[i] = projected
+				projectedPoints[i] = projected2D
 			}
 
 			// Calculate average depth for Painter's Algorithm
