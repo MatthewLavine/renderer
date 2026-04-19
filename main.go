@@ -26,7 +26,7 @@ const (
 	RenderShadedWireframe
 )
 
-var renderMethod = RenderSolidWireframe
+var renderMethod = RenderShaded
 var globalLightDirection = Vec3{X: 0, Y: 0, Z: 1} // Light shining directly into the screen
 
 // ApplyLightIntensity applies a given percentage of light (0.0 to 1.0) to a base color
@@ -290,9 +290,11 @@ func main() {
 	setup()
 
 	var lastFPS float64
+	targetFrameTime := 1.0 / 60.0 // Exactly 60 FPS (approx 0.0166667 seconds)
+	perfFreq := float64(sdl.GetPerformanceFrequency())
 
 	for running {
-		frameStart := sdl.GetTicks()
+		frameStart := sdl.GetPerformanceCounter()
 
 		processInput()
 
@@ -316,25 +318,31 @@ func main() {
 			modeStr = "Shaded + Wireframe"
 		}
 		stats := fmt.Sprintf(
-			"Update Time: %d us\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1-5)",
-			updateDuration.Microseconds(), lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces), modeStr,
+			"Update Time: %.2f ms\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1-5)",
+			updateDuration.Seconds()*1000.0, lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces), modeStr,
 		)
 		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
 
 		render()
 
-		// Sleep briefly to maintain roughly 60 FPS (16.6ms)
-		timeToWait := 16 - (sdl.GetTicks() - frameStart)
-		if timeToWait > 0 && timeToWait <= 16 {
-			sdl.Delay(timeToWait)
+		// Precise Frame Pacing
+		elapsed := float64(sdl.GetPerformanceCounter()-frameStart) / perfFreq
+		if elapsed < targetFrameTime {
+			timeToWait := targetFrameTime - elapsed
+			// Ask the OS to sleep for the bulk of the time to save CPU, but leave ~2ms buffer
+			if timeToWait > 0.002 {
+				sdl.Delay(uint32((timeToWait - 0.002) * 1000.0))
+			}
+			// Busy-wait the remaining fraction of a millisecond for perfect precision
+			for float64(sdl.GetPerformanceCounter()-frameStart)/perfFreq < targetFrameTime {
+				// Spin
+			}
 		}
 
-		// Calculate total time taken for the entire frame (including delay)
-		frameTime := sdl.GetTicks() - frameStart
-
-		// Calculate frames per second for the NEXT frame
+		// Calculate total frame time and FPS
+		frameTime := float64(sdl.GetPerformanceCounter()-frameStart) / perfFreq
 		if frameTime > 0 {
-			lastFPS = 1000.0 / float64(frameTime)
+			lastFPS = 1.0 / frameTime
 		}
 	}
 }
