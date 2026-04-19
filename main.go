@@ -98,7 +98,7 @@ func update() {
 	currentMesh.Rotation.Z += 0.01
 
 	// Loop over all faces in the mesh
-	for _, face := range currentMesh.Faces {
+	for fIndex, face := range currentMesh.Faces {
 		// Get the 3 vertices for this face
 		vertices := [3]Vec3{
 			currentMesh.Vertices[face.A],
@@ -131,12 +131,23 @@ func update() {
 			projectedPoints[i] = projected
 		}
 
-		// Draw the wireframe triangle for this face
+		// Generate a distinct color based on the face index
+		color := uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
+
+		// Draw the solid, filled triangle
+		DrawFilledTriangle(
+			int(projectedPoints[0].X), int(projectedPoints[0].Y),
+			int(projectedPoints[1].X), int(projectedPoints[1].Y),
+			int(projectedPoints[2].X), int(projectedPoints[2].Y),
+			color,
+		)
+		
+		// Draw the wireframe outline on top in dark gray so we can see the edges
 		DrawTriangle(
 			int(projectedPoints[0].X), int(projectedPoints[0].Y),
 			int(projectedPoints[1].X), int(projectedPoints[1].Y),
 			int(projectedPoints[2].X), int(projectedPoints[2].Y),
-			face.Color,
+			0xFF111111,
 		)
 	}
 }
