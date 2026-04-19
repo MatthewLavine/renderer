@@ -164,6 +164,21 @@ func update() {
 		// Spin the entity around its Y axis
 		entity.Rotation.Y += 0.01
 
+		// 1. Pre-calculate the World Matrix for this entity
+		scaleMatrix := Mat4Scale(entity.Scale.X, entity.Scale.Y, entity.Scale.Z)
+		rotationXMatrix := Mat4RotateX(entity.Rotation.X)
+		rotationYMatrix := Mat4RotateY(entity.Rotation.Y)
+		rotationZMatrix := Mat4RotateZ(entity.Rotation.Z)
+		translationMatrix := Mat4Translate(entity.Translation.X, entity.Translation.Y, entity.Translation.Z)
+
+		// Combine them: World = Translate * RotZ * RotY * RotX * Scale
+		worldMatrix := Mat4Identity()
+		worldMatrix = Mat4MulMat4(scaleMatrix, worldMatrix)
+		worldMatrix = Mat4MulMat4(rotationXMatrix, worldMatrix)
+		worldMatrix = Mat4MulMat4(rotationYMatrix, worldMatrix)
+		worldMatrix = Mat4MulMat4(rotationZMatrix, worldMatrix)
+		worldMatrix = Mat4MulMat4(translationMatrix, worldMatrix)
+
 		// Loop over all faces in the entity's mesh
 		for fIndex, face := range entity.Mesh.Faces {
 			// Get the 3 vertices for this face
@@ -175,20 +190,9 @@ func update() {
 
 			var transformedVertices [3]Vec3
 
-			// Transform each vertex
+			// Transform each vertex using the single World Matrix
 			for i, vertex := range vertices {
-				// 1. Scale
-				transformed := vertex.Mult(entity.Scale.X)
-
-				// 2. Rotate
-				transformed = transformed.RotateX(entity.Rotation.X)
-				transformed = transformed.RotateY(entity.Rotation.Y)
-				transformed = transformed.RotateZ(entity.Rotation.Z)
-
-				// 3. Translate (Push it away from camera)
-				transformed = transformed.Add(entity.Translation)
-
-				transformedVertices[i] = transformed
+				transformedVertices[i] = Mat4MulVec3(worldMatrix, vertex)
 			}
 
 			// --- Back-Face Culling ---
