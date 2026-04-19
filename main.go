@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"time"
 
@@ -14,21 +13,6 @@ var (
 	renderer *sdl.Renderer
 	texture  *sdl.Texture
 	running  bool
-
-	// Global rotation variable
-	cubeRotation float64
-
-	// The 8 corners of a 3D cube
-	cubePoints = [8]Vec3{
-		{X: -1, Y: -1, Z: -1}, // 0
-		{X: -1, Y: 1, Z: -1},  // 1
-		{X: 1, Y: 1, Z: -1},   // 2
-		{X: 1, Y: -1, Z: -1},  // 3
-		{X: -1, Y: -1, Z: 1},  // 4
-		{X: -1, Y: 1, Z: 1},   // 5
-		{X: 1, Y: 1, Z: 1},    // 6
-		{X: 1, Y: -1, Z: 1},   // 7
-	}
 )
 
 // Project takes a 3D point and squashes it onto a 2D plane (Perspective)
@@ -37,23 +21,6 @@ func Project(point Vec3) Vec2 {
 	return Vec2{
 		X: (fovFactor * point.X) / point.Z,
 		Y: (fovFactor * point.Y) / point.Z,
-	}
-}
-
-// Temporary functions to rotate our points until we build full Matrix math
-func RotateX(v Vec3, angle float64) Vec3 {
-	return Vec3{
-		X: v.X,
-		Y: v.Y*math.Cos(angle) - v.Z*math.Sin(angle),
-		Z: v.Y*math.Sin(angle) + v.Z*math.Cos(angle),
-	}
-}
-
-func RotateY(v Vec3, angle float64) Vec3 {
-	return Vec3{
-		X: v.X*math.Cos(angle) + v.Z*math.Sin(angle),
-		Y: v.Y,
-		Z: -v.X*math.Sin(angle) + v.Z*math.Cos(angle),
 	}
 }
 
@@ -83,7 +50,6 @@ func initializeWindow() bool {
 		return false
 	}
 
-	// Create a texture that we will stream our pixel data into every frame
 	texture, err = renderer.CreateTexture(
 		sdl.PIXELFORMAT_ARGB8888,
 		sdl.TEXTUREACCESS_STREAMING,
@@ -101,6 +67,12 @@ func initializeWindow() bool {
 func setup() {
 	// Allocate memory for our custom color buffer
 	colorBuffer = make([]uint32, WindowWidth*WindowHeight)
+
+	// Load our 3D mesh from disk
+	err := LoadOBJ("assets/cube.obj")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading OBJ file: %v\n", err)
+	}
 }
 
 func processInput() {
@@ -120,55 +92,51 @@ func update() {
 	// Clear the screen to a dark gray/black
 	ClearColorBuffer(0xFF111111)
 
-	// Spin the cube
-	cubeRotation += 0.02
+	// Spin the mesh globally
+	currentMesh.Rotation.X += 0.01
+	currentMesh.Rotation.Y += 0.01
+	currentMesh.Rotation.Z += 0.01
 
-	var projectedPoints [8]Vec2
+	// Loop over all faces in the mesh
+	for _, face := range currentMesh.Faces {
+		// Get the 3 vertices for this face
+		vertices := [3]Vec3{
+			currentMesh.Vertices[face.A],
+			currentMesh.Vertices[face.B],
+			currentMesh.Vertices[face.C],
+		}
 
-	for i, point := range cubePoints {
-		// 1. Rotate the point in 3D space
-		rotated := RotateX(point, cubeRotation)
-		rotated = RotateY(rotated, cubeRotation)
+		var projectedPoints [3]Vec2
 
-		// 2. Push the point away from the camera into the screen
-		rotated.Z += 5.0
+		// Transform and project each vertex
+		for i, vertex := range vertices {
+			// 1. Scale
+			transformed := vertex.Mult(currentMesh.Scale.X) // Assuming uniform scale
 
-		// 3. Project from 3D to 2D
-		projected := Project(rotated)
+			// 2. Rotate
+			transformed = transformed.RotateX(currentMesh.Rotation.X)
+			transformed = transformed.RotateY(currentMesh.Rotation.Y)
+			transformed = transformed.RotateZ(currentMesh.Rotation.Z)
 
-		// 4. Center the projection on the screen
-		projected.X += float64(WindowWidth) / 2.0
-		projected.Y += float64(WindowHeight) / 2.0
+			// 3. Translate (Push it away from camera)
+			transformed = transformed.Add(currentMesh.Translation)
 
-		projectedPoints[i] = projected
-	}
+			// 4. Project from 3D to 2D
+			projected := Project(transformed)
 
-	// Draw the 12 edges of the wireframe cube
+			// 5. Center the projection on the screen
+			projected.X += float64(WindowWidth) / 2.0
+			projected.Y += float64(WindowHeight) / 2.0
 
-	// Front face
-	for i := 0; i < 4; i++ {
-		DrawLine(
-			int(projectedPoints[i].X), int(projectedPoints[i].Y),
-			int(projectedPoints[(i+1)%4].X), int(projectedPoints[(i+1)%4].Y),
-			0xFF00FF00, // Green
-		)
-	}
+			projectedPoints[i] = projected
+		}
 
-	// Back face
-	for i := 0; i < 4; i++ {
-		DrawLine(
-			int(projectedPoints[i+4].X), int(projectedPoints[i+4].Y),
-			int(projectedPoints[((i+1)%4)+4].X), int(projectedPoints[((i+1)%4)+4].Y),
-			0xFF00FF00,
-		)
-	}
-
-	// Connecting edges
-	for i := 0; i < 4; i++ {
-		DrawLine(
-			int(projectedPoints[i].X), int(projectedPoints[i].Y),
-			int(projectedPoints[i+4].X), int(projectedPoints[i+4].Y),
-			0xFF00FF00,
+		// Draw the wireframe triangle for this face
+		DrawTriangle(
+			int(projectedPoints[0].X), int(projectedPoints[0].Y),
+			int(projectedPoints[1].X), int(projectedPoints[1].Y),
+			int(projectedPoints[2].X), int(projectedPoints[2].Y),
+			face.Color,
 		)
 	}
 }
