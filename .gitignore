@@ -1,0 +1,8 @@
+# Compiled binaries
+renderer_app
+renderer
+*.exe
+
+# Go workspace file
+go.work
+go.work.sum
