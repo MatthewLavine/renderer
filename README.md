@@ -2,6 +2,8 @@
 
 A high-performance, dependency-light 3D software rasterizer built from scratch in Go. This engine implements the entire graphics pipeline on the CPU, manually calculating every pixel before pushing the final frame to an SDL2 window.
 
+![demo](assets/demo.png)
+
 ## Features
 
 ### 🛠️ The 3D Pipeline
