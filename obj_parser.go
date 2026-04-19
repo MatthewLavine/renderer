@@ -18,8 +18,9 @@ func LoadOBJ(filename string) error {
 
 	// Initialize the global mesh
 	currentMesh = Mesh{
+		Rotation:    Vec3{X: 0, Y: 0, Z: 0},
 		Scale:       Vec3{X: 1, Y: 1, Z: 1},
-		Translation: Vec3{X: 0, Y: 0, Z: 5}, // Push the mesh 5 units into the screen by default
+		Translation: Vec3{X: 0, Y: -1.5, Z: 6}, // Push the mesh 6 units into the screen, and down 1.5 units to center it
 	}
 
 	scanner := bufio.NewScanner(file)

@@ -22,16 +22,34 @@ const (
 	RenderWireframe RenderMethod = iota
 	RenderSolid
 	RenderSolidWireframe
+	RenderShaded
+	RenderShadedWireframe
 )
 
 var renderMethod = RenderSolidWireframe
+var globalLightDirection = Vec3{X: 0, Y: 0, Z: 1} // Light shining directly into the screen
+
+// ApplyLightIntensity applies a given percentage of light (0.0 to 1.0) to a base color
+func ApplyLightIntensity(baseColor uint32, intensity float64) uint32 {
+	a := (baseColor >> 24) & 0xFF
+	r := float64((baseColor >> 16) & 0xFF)
+	g := float64((baseColor >> 8) & 0xFF)
+	b := float64(baseColor & 0xFF)
+
+	// Apply intensity
+	r *= intensity
+	g *= intensity
+	b *= intensity
+
+	return (a << 24) | (uint32(r) << 16) | (uint32(g) << 8) | uint32(b)
+}
 
 // Project takes a 3D point and squashes it onto a 2D plane (Perspective)
 func Project(point Vec3) Vec2 {
 	fovFactor := 640.0 // Controls how strong the perspective distortion is
 	return Vec2{
 		X: (fovFactor * point.X) / point.Z,
-		Y: (fovFactor * point.Y) / point.Z,
+		Y: -(fovFactor * point.Y) / point.Z, // Negate Y so +Y goes UP the screen
 	}
 }
 
@@ -80,7 +98,7 @@ func setup() {
 	colorBuffer = make([]uint32, WindowWidth*WindowHeight)
 
 	// Load our 3D mesh from disk
-	err := LoadOBJ("assets/cube.obj")
+	err := LoadOBJ("assets/teapot.obj")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading OBJ file: %v\n", err)
 	}
@@ -102,6 +120,10 @@ func processInput() {
 					renderMethod = RenderSolid
 				case sdl.K_3:
 					renderMethod = RenderSolidWireframe
+				case sdl.K_4:
+					renderMethod = RenderShaded
+				case sdl.K_5:
+					renderMethod = RenderShadedWireframe
 				}
 			}
 		}
@@ -119,10 +141,8 @@ func update() {
 	// Clear the screen to a dark gray/black
 	ClearColorBuffer(0xFF111111)
 
-	// Spin the mesh globally
-	currentMesh.Rotation.X += 0.01
+	// Spin the mesh globally around the Y axis
 	currentMesh.Rotation.Y += 0.01
-	currentMesh.Rotation.Z += 0.01
 
 	var trianglesToRender []TriangleToRender
 	cameraPosition := Vec3{X: 0, Y: 0, Z: 0}
@@ -191,8 +211,21 @@ func update() {
 		// Calculate average depth for Painter's Algorithm
 		avgDepth := (transformedVertices[0].Z + transformedVertices[1].Z + transformedVertices[2].Z) / 3.0
 
-		// Generate a distinct color based on the face index
-		color := uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
+		// Calculate light intensity based on how directly the face points at the light
+		// We negate the dot product because light comes towards +Z and normal points towards -Z
+		lightIntensity := -normal.Dot(globalLightDirection)
+		if lightIntensity < 0.15 {
+			lightIntensity = 0.15 // Ambient light baseline so shadows aren't pitch black
+		}
+
+		var color uint32
+		if renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
+			baseColor := uint32(0xFFFFFFFF) // White base color
+			color = ApplyLightIntensity(baseColor, lightIntensity)
+		} else {
+			// Generate a distinct color based on the face index (Flat random colors)
+			color = uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
+		}
 
 		trianglesToRender = append(trianglesToRender, TriangleToRender{
 			Points:   projectedPoints,
@@ -209,7 +242,7 @@ func update() {
 
 	// Render all sorted triangles
 	for _, t := range trianglesToRender {
-		if renderMethod == RenderSolid || renderMethod == RenderSolidWireframe {
+		if renderMethod == RenderSolid || renderMethod == RenderSolidWireframe || renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
 			// Draw the solid, filled triangle
 			DrawFilledTriangle(
 				int(t.Points[0].X), int(t.Points[0].Y),
@@ -219,7 +252,7 @@ func update() {
 			)
 		}
 
-		if renderMethod == RenderWireframe || renderMethod == RenderSolidWireframe {
+		if renderMethod == RenderWireframe || renderMethod == RenderSolidWireframe || renderMethod == RenderShadedWireframe {
 			wireColor := uint32(0xFF111111) // Dark gray default
 			if renderMethod == RenderWireframe {
 				wireColor = 0xFFFFFFFF // White for visibility on dark background
@@ -277,9 +310,13 @@ func main() {
 			modeStr = "Solid"
 		case RenderSolidWireframe:
 			modeStr = "Solid + Wireframe"
+		case RenderShaded:
+			modeStr = "Shaded"
+		case RenderShadedWireframe:
+			modeStr = "Shaded + Wireframe"
 		}
 		stats := fmt.Sprintf(
-			"Update Time: %d us\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1,2,3)",
+			"Update Time: %d us\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1-5)",
 			updateDuration.Microseconds(), lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces), modeStr,
 		)
 		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
