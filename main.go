@@ -145,6 +145,10 @@ func processInput() {
 					renderMethod = RenderShaded
 				case sdl.K_5:
 					renderMethod = RenderShadedWireframe
+				case sdl.K_r:
+					globalCamera.Position = Vec3{X: 0, Y: 0, Z: -5.0}
+					globalCamera.Pitch = 0
+					globalCamera.Yaw = 0
 				}
 			}
 		}
