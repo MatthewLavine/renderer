@@ -14,6 +14,9 @@ var (
 	renderer *sdl.Renderer
 	texture  *sdl.Texture
 	running  bool
+
+	scene        []*Entity
+	renderMethod = RenderShaded
 )
 
 type RenderMethod int
@@ -26,7 +29,6 @@ const (
 	RenderShadedWireframe
 )
 
-var renderMethod = RenderShaded
 var globalLightDirection = Vec3{X: 0, Y: 0, Z: 1} // Light shining directly into the screen
 
 // ApplyLightIntensity applies a given percentage of light (0.0 to 1.0) to a base color
@@ -98,9 +100,22 @@ func setup() {
 	colorBuffer = make([]uint32, WindowWidth*WindowHeight)
 
 	// Load our 3D mesh from disk
-	err := LoadOBJ("assets/teapot.obj")
+	teapotMesh, err := LoadOBJ("assets/teapot.obj")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading OBJ file: %v\n", err)
+	}
+
+	// Create 9 teapots in a 3x3 grid
+	for x := -1; x <= 1; x++ {
+		for y := -1; y <= 1; y++ {
+			entity := &Entity{
+				Mesh:        teapotMesh,
+				Rotation:    Vec3{X: 0, Y: 0, Z: 0},
+				Scale:       Vec3{X: 1, Y: 1, Z: 1},
+				Translation: Vec3{X: float64(x) * 5.0, Y: (float64(y) * 5.0) - 1.5, Z: 15},
+			}
+			scene = append(scene, entity)
+		}
 	}
 }
 
@@ -141,97 +156,100 @@ func update() {
 	// Clear the screen to a dark gray/black
 	ClearColorBuffer(0xFF111111)
 
-	// Spin the mesh globally around the Y axis
-	currentMesh.Rotation.Y += 0.01
-
 	var trianglesToRender []TriangleToRender
 	cameraPosition := Vec3{X: 0, Y: 0, Z: 0}
 
-	// Loop over all faces in the mesh
-	for fIndex, face := range currentMesh.Faces {
-		// Get the 3 vertices for this face
-		vertices := [3]Vec3{
-			currentMesh.Vertices[face.A],
-			currentMesh.Vertices[face.B],
-			currentMesh.Vertices[face.C],
-		}
+	// Loop over all entities in the scene
+	for _, entity := range scene {
+		// Spin the entity around its Y axis
+		entity.Rotation.Y += 0.01
 
-		var transformedVertices [3]Vec3
-
-		// Transform each vertex
-		for i, vertex := range vertices {
-			// 1. Scale
-			transformed := vertex.Mult(currentMesh.Scale.X)
-
-			// 2. Rotate
-			transformed = transformed.RotateX(currentMesh.Rotation.X)
-			transformed = transformed.RotateY(currentMesh.Rotation.Y)
-			transformed = transformed.RotateZ(currentMesh.Rotation.Z)
-
-			// 3. Translate (Push it away from camera)
-			transformed = transformed.Add(currentMesh.Translation)
-
-			transformedVertices[i] = transformed
-		}
-
-		// --- Back-Face Culling ---
-		// 1. Calculate the face normal
-		edge1 := transformedVertices[1].Sub(transformedVertices[0])
-		edge2 := transformedVertices[2].Sub(transformedVertices[0])
-		normal := edge1.Cross(edge2).Normalize()
-
-		// 2. Calculate the camera ray (vector from camera to the face)
-		cameraRay := transformedVertices[0].Sub(cameraPosition)
-
-		// 3. Calculate dot product
-		dot := normal.Dot(cameraRay)
-
-		// If dot > 0, the face is pointing away from the camera
-		// We bypass culling if we are in pure Wireframe mode so we can see through the model
-		if renderMethod != RenderWireframe {
-			if dot > 0 {
-				continue
+		// Loop over all faces in the entity's mesh
+		for fIndex, face := range entity.Mesh.Faces {
+			// Get the 3 vertices for this face
+			vertices := [3]Vec3{
+				entity.Mesh.Vertices[face.A],
+				entity.Mesh.Vertices[face.B],
+				entity.Mesh.Vertices[face.C],
 			}
+
+			var transformedVertices [3]Vec3
+
+			// Transform each vertex
+			for i, vertex := range vertices {
+				// 1. Scale
+				transformed := vertex.Mult(entity.Scale.X)
+
+				// 2. Rotate
+				transformed = transformed.RotateX(entity.Rotation.X)
+				transformed = transformed.RotateY(entity.Rotation.Y)
+				transformed = transformed.RotateZ(entity.Rotation.Z)
+
+				// 3. Translate (Push it away from camera)
+				transformed = transformed.Add(entity.Translation)
+
+				transformedVertices[i] = transformed
+			}
+
+			// --- Back-Face Culling ---
+			// 1. Calculate the face normal
+			edge1 := transformedVertices[1].Sub(transformedVertices[0])
+			edge2 := transformedVertices[2].Sub(transformedVertices[0])
+			normal := edge1.Cross(edge2).Normalize()
+
+			// 2. Calculate the camera ray (vector from camera to the face)
+			cameraRay := transformedVertices[0].Sub(cameraPosition)
+
+			// 3. Calculate dot product
+			dot := normal.Dot(cameraRay)
+
+			// If dot > 0, the face is pointing away from the camera
+			// We bypass culling if we are in pure Wireframe mode so we can see through the model
+			if renderMethod != RenderWireframe {
+				if dot > 0 {
+					continue
+				}
+			}
+
+			var projectedPoints [3]Vec2
+
+			// Project each transformed vertex
+			for i, transformed := range transformedVertices {
+				// 4. Project from 3D to 2D
+				projected := Project(transformed)
+
+				// 5. Center the projection on the screen
+				projected.X += float64(WindowWidth) / 2.0
+				projected.Y += float64(WindowHeight) / 2.0
+
+				projectedPoints[i] = projected
+			}
+
+			// Calculate average depth for Painter's Algorithm
+			avgDepth := (transformedVertices[0].Z + transformedVertices[1].Z + transformedVertices[2].Z) / 3.0
+
+			// Calculate light intensity based on how directly the face points at the light
+			// We negate the dot product because light comes towards +Z and normal points towards -Z
+			lightIntensity := -normal.Dot(globalLightDirection)
+			if lightIntensity < 0.15 {
+				lightIntensity = 0.15 // Ambient light baseline so shadows aren't pitch black
+			}
+
+			var color uint32
+			if renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
+				baseColor := uint32(0xFFFFFFFF) // White base color
+				color = ApplyLightIntensity(baseColor, lightIntensity)
+			} else {
+				// Generate a distinct color based on the face index (Flat random colors)
+				color = uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
+			}
+
+			trianglesToRender = append(trianglesToRender, TriangleToRender{
+				Points:   projectedPoints,
+				Color:    color,
+				AvgDepth: avgDepth,
+			})
 		}
-
-		var projectedPoints [3]Vec2
-
-		// Project each transformed vertex
-		for i, transformed := range transformedVertices {
-			// 4. Project from 3D to 2D
-			projected := Project(transformed)
-
-			// 5. Center the projection on the screen
-			projected.X += float64(WindowWidth) / 2.0
-			projected.Y += float64(WindowHeight) / 2.0
-
-			projectedPoints[i] = projected
-		}
-
-		// Calculate average depth for Painter's Algorithm
-		avgDepth := (transformedVertices[0].Z + transformedVertices[1].Z + transformedVertices[2].Z) / 3.0
-
-		// Calculate light intensity based on how directly the face points at the light
-		// We negate the dot product because light comes towards +Z and normal points towards -Z
-		lightIntensity := -normal.Dot(globalLightDirection)
-		if lightIntensity < 0.15 {
-			lightIntensity = 0.15 // Ambient light baseline so shadows aren't pitch black
-		}
-
-		var color uint32
-		if renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
-			baseColor := uint32(0xFFFFFFFF) // White base color
-			color = ApplyLightIntensity(baseColor, lightIntensity)
-		} else {
-			// Generate a distinct color based on the face index (Flat random colors)
-			color = uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
-		}
-
-		trianglesToRender = append(trianglesToRender, TriangleToRender{
-			Points:   projectedPoints,
-			Color:    color,
-			AvgDepth: avgDepth,
-		})
 	}
 
 	// --- Painter's Algorithm ---
@@ -317,9 +335,19 @@ func main() {
 		case RenderShadedWireframe:
 			modeStr = "Shaded + Wireframe"
 		}
+
+		totalVertices := 0
+		totalFaces := 0
+		for _, e := range scene {
+			if e.Mesh != nil {
+				totalVertices += len(e.Mesh.Vertices)
+				totalFaces += len(e.Mesh.Faces)
+			}
+		}
+
 		stats := fmt.Sprintf(
 			"Update Time: %.2f ms\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1-5)",
-			updateDuration.Seconds()*1000.0, lastFPS, len(currentMesh.Vertices), len(currentMesh.Faces), modeStr,
+			updateDuration.Seconds()*1000.0, lastFPS, totalVertices, totalFaces, modeStr,
 		)
 		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
 
