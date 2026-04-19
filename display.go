@@ -2,6 +2,8 @@ package main
 
 import (
 	"math"
+	"runtime"
+	"sync"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -15,18 +17,48 @@ const (
 var colorBuffer []uint32
 var zBuffer []float64
 
-// ClearColorBuffer fills the entire screen with a single solid color
+// ClearColorBuffer fills the entire screen with a single solid color in parallel
 func ClearColorBuffer(color uint32) {
-	for i := range colorBuffer {
-		colorBuffer[i] = color
+	numWorkers := runtime.NumCPU()
+	size := len(colorBuffer)
+	chunkSize := size / numWorkers
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			start := id * chunkSize
+			end := start + chunkSize
+			if id == numWorkers-1 { end = size }
+			for j := start; j < end; j++ {
+				colorBuffer[j] = color
+			}
+		}(i)
 	}
+	wg.Wait()
 }
 
-// ClearZBuffer resets the depth buffer to the far plane (1.0)
+// ClearZBuffer resets the depth buffer to the far plane (1.0) in parallel
 func ClearZBuffer() {
-	for i := range zBuffer {
-		zBuffer[i] = 1.0
+	numWorkers := runtime.NumCPU()
+	size := len(zBuffer)
+	chunkSize := size / numWorkers
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			start := id * chunkSize
+			end := start + chunkSize
+			if id == numWorkers-1 { end = size }
+			for j := start; j < end; j++ {
+				zBuffer[j] = 1.0
+			}
+		}(i)
 	}
+	wg.Wait()
 }
 
 // SetPixel sets the color of a specific pixel on the screen
@@ -82,7 +114,8 @@ func DrawTriangle(x0, y0, x1, y1, x2, y2 int, color uint32) {
 
 // DrawFilledTriangle draws a solid, filled triangle using Barycentric coordinates.
 // It features perfect screen clamping and Z-Buffering.
-func DrawFilledTriangle(v0, v1, v2 Vec3, color uint32) {
+// limitMinY and limitMaxY define the vertical strip this triangle is allowed to draw in.
+func DrawFilledTriangle(v0, v1, v2 Vec3, color uint32, limitMinY, limitMaxY int) {
 	// 1. Find the bounding box of the triangle on the screen
 	minX := int(math.Floor(math.Min(v0.X, math.Min(v1.X, v2.X))))
 	maxX := int(math.Ceil(math.Max(v0.X, math.Max(v1.X, v2.X))))
@@ -94,8 +127,8 @@ func DrawFilledTriangle(v0, v1, v2 Vec3, color uint32) {
 	// loop over pixels that are outside the physical screen boundaries.
 	if minX < 0 { minX = 0 }
 	if maxX >= WindowWidth { maxX = WindowWidth - 1 }
-	if minY < 0 { minY = 0 }
-	if maxY >= WindowHeight { maxY = WindowHeight - 1 }
+	if minY < limitMinY { minY = limitMinY }
+	if maxY >= limitMaxY { maxY = limitMaxY - 1 }
 
 	// Calculate the total area of the triangle for barycentric division
 	area := edgeCrossProduct(v0, v1, v2)

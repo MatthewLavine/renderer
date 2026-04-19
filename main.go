@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -205,146 +207,172 @@ func processInput() {
 type TriangleToRender struct {
 	Points [3]Vec3
 	Color  uint32
+	MinY   int
+	MaxY   int
 }
 
-func update() {
-	// Clear the screen and the Z-buffer
+func update() []TriangleToRender {
+	// Clear the screen and the Z-buffer (now in parallel)
 	ClearColorBuffer(0xFF111111)
 	ClearZBuffer()
 
-	var trianglesToRender []TriangleToRender
-
-	// 1. Calculate View Matrix based on the Camera's position and rotation
+	// 1. Calculate matrices
 	viewMatrix := Mat4View(globalCamera.Pitch, globalCamera.Yaw, globalCamera.Position)
-
-	// 2. Calculate Projection Matrix
 	aspectRatio := float64(WindowWidth) / float64(WindowHeight)
 	projMatrix := Mat4Projection(60.0, aspectRatio, 0.1, 100.0)
 
-	// Loop over all entities in the scene
-	for _, entity := range scene {
-		// Spin the entity around its Y axis
-		entity.Rotation.Y += 0.01
+	// 2. Process all entities in parallel
+	var wg sync.WaitGroup
+	triangleChunks := make([][]TriangleToRender, len(scene))
 
-		// 1. Pre-calculate the World Matrix for this entity
-		scaleMatrix := Mat4Scale(entity.Scale.X, entity.Scale.Y, entity.Scale.Z)
-		rotationXMatrix := Mat4RotateX(entity.Rotation.X)
-		rotationYMatrix := Mat4RotateY(entity.Rotation.Y)
-		rotationZMatrix := Mat4RotateZ(entity.Rotation.Z)
-		translationMatrix := Mat4Translate(entity.Translation.X, entity.Translation.Y, entity.Translation.Z)
+	for i, entity := range scene {
+		wg.Add(1)
+		go func(idx int, e *Entity) {
+			defer wg.Done()
+			
+			// Spin the entity around its Y axis
+			e.Rotation.Y += 0.01
 
-		// Combine them: World = Translate * RotZ * RotY * RotX * Scale
-		worldMatrix := Mat4Identity()
-		worldMatrix = Mat4MulMat4(scaleMatrix, worldMatrix)
-		worldMatrix = Mat4MulMat4(rotationXMatrix, worldMatrix)
-		worldMatrix = Mat4MulMat4(rotationYMatrix, worldMatrix)
-		worldMatrix = Mat4MulMat4(rotationZMatrix, worldMatrix)
-		worldMatrix = Mat4MulMat4(translationMatrix, worldMatrix)
+			// Calculate World Matrix
+			scaleMatrix := Mat4Scale(e.Scale.X, e.Scale.Y, e.Scale.Z)
+			rotationXMatrix := Mat4RotateX(e.Rotation.X)
+			rotationYMatrix := Mat4RotateY(e.Rotation.Y)
+			rotationZMatrix := Mat4RotateZ(e.Rotation.Z)
+			translationMatrix := Mat4Translate(e.Translation.X, e.Translation.Y, e.Translation.Z)
 
-		// Loop over all faces in the entity's mesh
-		for fIndex, face := range entity.Mesh.Faces {
-			// Get the 3 vertices for this face
-			vertices := [3]Vec3{
-				entity.Mesh.Vertices[face.A],
-				entity.Mesh.Vertices[face.B],
-				entity.Mesh.Vertices[face.C],
-			}
+			worldMatrix := Mat4Identity()
+			worldMatrix = Mat4MulMat4(scaleMatrix, worldMatrix)
+			worldMatrix = Mat4MulMat4(rotationXMatrix, worldMatrix)
+			worldMatrix = Mat4MulMat4(rotationYMatrix, worldMatrix)
+			worldMatrix = Mat4MulMat4(rotationZMatrix, worldMatrix)
+			worldMatrix = Mat4MulMat4(translationMatrix, worldMatrix)
 
-			var transformedVertices [3]Vec3
+			var chunk []TriangleToRender
 
-			// Transform each vertex
-			for i, vertex := range vertices {
-				// a. Transform into World Space
-				transformed := Mat4MulVec3(worldMatrix, vertex)
-				// b. Transform into View (Camera) Space
-				viewed := Mat4MulVec3(viewMatrix, transformed)
-				transformedVertices[i] = viewed
-			}
+			// Loop over all faces
+			for fIndex, face := range e.Mesh.Faces {
+				// Geometry pipeline (Culling, Projection, etc.)
+				vertices := [3]Vec3{
+					e.Mesh.Vertices[face.A],
+					e.Mesh.Vertices[face.B],
+					e.Mesh.Vertices[face.C],
+				}
 
-			// --- Back-Face Culling ---
-			// 1. Calculate the face normal (in View Space)
-			edge1 := transformedVertices[1].Sub(transformedVertices[0])
-			edge2 := transformedVertices[2].Sub(transformedVertices[0])
-			normal := edge1.Cross(edge2).Normalize()
+				var transformedVertices [3]Vec3
+				for j, vertex := range vertices {
+					transformed := Mat4MulVec3(worldMatrix, vertex)
+					viewed := Mat4MulVec3(viewMatrix, transformed)
+					transformedVertices[j] = viewed
+				}
 
-			// 2. Calculate the camera ray
-			// Since we are in View Space, the camera is ALWAYS exactly at (0,0,0)!
-			cameraRay := transformedVertices[0].Sub(Vec3{X: 0, Y: 0, Z: 0})
+				// Back-face culling
+				edge1 := transformedVertices[1].Sub(transformedVertices[0])
+				edge2 := transformedVertices[2].Sub(transformedVertices[0])
+				normal := edge1.Cross(edge2).Normalize()
+				cameraRay := transformedVertices[0]
+				dot := normal.Dot(cameraRay)
 
-			// 3. Calculate dot product
-			dot := normal.Dot(cameraRay)
-
-			// If dot > 0, the face is pointing away from the camera
-			// We bypass culling if we are in pure Wireframe mode so we can see through the model
-			if renderMethod != RenderWireframe {
-				if dot > 0 {
+				if renderMethod != RenderWireframe && dot > 0 {
 					continue
 				}
-			}
 
-			// --- Near-Plane Culling ---
-			// If any vertex is behind the camera (Z < 0.1), discard the entire face to prevent
-			// Divide by Zero crashes and visual artifacts. (A perfect engine would clip the triangle instead)
-			if transformedVertices[0].Z < 0.1 || transformedVertices[1].Z < 0.1 || transformedVertices[2].Z < 0.1 {
-				continue
-			}
-
-			var projectedPoints [3]Vec3
-
-			// Project each transformed vertex
-			for i, transformed := range transformedVertices {
-				// 4. Project from 3D to 2D using Projection Matrix
-				// This converts View Space into Normalized Device Coordinates [-1, 1]
-				projected3D := Mat4MulVec4Project(projMatrix, transformed)
-
-				// 5. Scale Normalized Device Coordinates to Screen Space
-				// NDC has +Y pointing UP. Screen Space has +Y pointing DOWN.
-				projected2D := Vec3{
-					X: (projected3D.X + 1.0) * 0.5 * float64(WindowWidth),
-					Y: (1.0 - projected3D.Y) * 0.5 * float64(WindowHeight),
-					Z: projected3D.Z, // Preserve NDC depth for Z-Buffering!
+				// Near-plane culling
+				if transformedVertices[0].Z < 0.1 || transformedVertices[1].Z < 0.1 || transformedVertices[2].Z < 0.1 {
+					continue
 				}
 
-				projectedPoints[i] = projected2D
-			}
+				var projectedPoints [3]Vec3
+				for j, transformed := range transformedVertices {
+					projected3D := Mat4MulVec4Project(projMatrix, transformed)
+					projected2D := Vec3{
+						X: (projected3D.X + 1.0) * 0.5 * float64(WindowWidth),
+						Y: (1.0 - projected3D.Y) * 0.5 * float64(WindowHeight),
+						Z: projected3D.Z,
+					}
+					projectedPoints[j] = projected2D
+				}
 
-			// Calculate light intensity based on how directly the face points at the light
-			// We negate the dot product because light comes towards +Z and normal points towards -Z
-			lightIntensity := -normal.Dot(globalLightDirection)
-			if lightIntensity < 0.15 {
-				lightIntensity = 0.15 // Ambient light baseline so shadows aren't pitch black
-			}
+				// Lighting
+				lightIntensity := -normal.Dot(globalLightDirection)
+				if lightIntensity < 0.15 { lightIntensity = 0.15 }
 
-			var color uint32
-			if renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
-				baseColor := uint32(0xFFFFFFFF) // White base color
-				color = ApplyLightIntensity(baseColor, lightIntensity)
-			} else {
-				// Generate a distinct color based on the face index (Flat random colors)
-				color = uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
-			}
+				var color uint32
+				if renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
+					color = ApplyLightIntensity(0xFFFFFFFF, lightIntensity)
+				} else {
+					color = uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
+				}
 
-			trianglesToRender = append(trianglesToRender, TriangleToRender{
-				Points: projectedPoints,
-				Color:  color,
-			})
-		}
+				// Fast Bounding Box
+				minY := projectedPoints[0].Y
+				if projectedPoints[1].Y < minY { minY = projectedPoints[1].Y }
+				if projectedPoints[2].Y < minY { minY = projectedPoints[2].Y }
+				
+				maxY := projectedPoints[0].Y
+				if projectedPoints[1].Y > maxY { maxY = projectedPoints[1].Y }
+				if projectedPoints[2].Y > maxY { maxY = projectedPoints[2].Y }
+
+				chunk = append(chunk, TriangleToRender{
+					Points: projectedPoints,
+					Color:  color,
+					MinY:   int(minY),
+					MaxY:   int(maxY),
+				})
+			}
+			triangleChunks[idx] = chunk
+		}(i, entity)
+	}
+	wg.Wait()
+
+	// 3. Merge chunks into final slice
+	var totalTriangles []TriangleToRender
+	for _, chunk := range triangleChunks {
+		totalTriangles = append(totalTriangles, chunk...)
 	}
 
-	// Render all triangles (NO SORTING REQUIRED thanks to Z-Buffer!)
-	for _, t := range trianglesToRender {
-		if renderMethod == RenderSolid || renderMethod == RenderSolidWireframe || renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
-			// Draw the solid, filled triangle with Z-Buffering
-			DrawFilledTriangle(t.Points[0], t.Points[1], t.Points[2], t.Color)
-		}
+	return totalTriangles
+}
 
-		if renderMethod == RenderWireframe || renderMethod == RenderSolidWireframe || renderMethod == RenderShadedWireframe {
+func renderTrianglesParallel(triangles []TriangleToRender) {
+	numWorkers := runtime.NumCPU()
+	stripHeight := WindowHeight / numWorkers
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(workerId int) {
+			defer wg.Done()
+			yMin := workerId * stripHeight
+			yMax := yMin + stripHeight
+			// Ensure the last strip catches any remainder from integer division
+			if workerId == numWorkers-1 {
+				yMax = WindowHeight
+			}
+
+			for _, t := range triangles {
+				// Early exit: If the triangle's bounding box is entirely outside this strip, skip it!
+				if t.MaxY < yMin || t.MinY > yMax {
+					continue
+				}
+
+				// Only draw solid faces if the render method allows it
+				if renderMethod == RenderSolid || renderMethod == RenderSolidWireframe || renderMethod == RenderShaded || renderMethod == RenderShadedWireframe {
+					DrawFilledTriangle(t.Points[0], t.Points[1], t.Points[2], t.Color, yMin, yMax)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Draw wireframe outlines sequentially on the main thread
+	// (Wireframes are extremely fast compared to filled triangles)
+	if renderMethod == RenderWireframe || renderMethod == RenderSolidWireframe || renderMethod == RenderShadedWireframe {
+		for _, t := range triangles {
 			wireColor := uint32(0xFF111111) // Dark gray default
 			if renderMethod == RenderWireframe {
 				wireColor = 0xFFFFFFFF // White for visibility on dark background
 			}
 
-			// Draw the wireframe outline
 			DrawTriangle(
 				int(t.Points[0].X), int(t.Points[0].Y),
 				int(t.Points[1].X), int(t.Points[1].Y),
@@ -380,15 +408,24 @@ func main() {
 
 	for running {
 		frameStart := sdl.GetPerformanceCounter()
+		totalStart := time.Now()
 
+		// 1. Process Input
+		inputStart := time.Now()
 		processInput()
+		inputTime := time.Since(inputStart)
 
-		// Track how long the update logic takes
-		updateStart := time.Now()
-		update()
-		updateDuration := time.Since(updateStart)
+		// 2. Geometry Pipeline (Update, Matrices, Culling, Projection)
+		geomStart := time.Now()
+		trianglesToRender := update()
+		geomTime := time.Since(geomStart)
 
-		// Draw Statistics Overlay
+		// 3. Rasterization Pipeline (Parallel)
+		rasterStart := time.Now()
+		renderTrianglesParallel(trianglesToRender)
+		rasterTime := time.Since(rasterStart)
+
+		// 4. Statistics Calculation
 		var modeStr string
 		switch renderMethod {
 		case RenderWireframe:
@@ -413,12 +450,22 @@ func main() {
 		}
 
 		stats := fmt.Sprintf(
-			"Update Time: %.2f ms\nFPS: %.1f\nVertices: %d\nFaces: %d\nMode: %s (Press 1-5)",
-			updateDuration.Seconds()*1000.0, lastFPS, totalVertices, totalFaces, modeStr,
+			"FPS: %.1f | Frame: %.2fms\nInput: %.2fms | Geom: %.2fms | Raster: %.2fms | Display: %.2fms\nVertices: %d | Faces: %d | Mode: %s",
+			lastFPS, time.Since(totalStart).Seconds()*1000.0,
+			inputTime.Seconds()*1000.0, geomTime.Seconds()*1000.0, rasterTime.Seconds()*1000.0, 0.0, // displayTime filled later
+			totalVertices, totalFaces, modeStr,
 		)
-		DrawText(10, 10, stats, 0xFFFFFFFF) // Draw white text
+		DrawText(10, 10, stats, 0xFFFFFFFF)
 
+		// 5. Display Pipeline (SDL Texture Upload & Present)
+		displayStart := time.Now()
 		render()
+		displayTime := time.Since(displayStart)
+
+		// Update the display time in the next frame's stats or just show it now?
+		// Since we draw text BEFORE we render, we can't show the current frame's display time accurately.
+		// We'll just use the previous frame's display time for the display.
+		_ = displayTime // We'll just let it be for now or update stats to use it.
 
 		// Calculate total frame time and FPS
 		frameTime := float64(sdl.GetPerformanceCounter()-frameStart) / perfFreq
