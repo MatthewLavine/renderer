@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -88,6 +89,13 @@ func processInput() {
 	}
 }
 
+// TriangleToRender holds projected 2D coordinates and depth information for Painter's algorithm
+type TriangleToRender struct {
+	Points   [3]Vec2
+	Color    uint32
+	AvgDepth float64
+}
+
 func update() {
 	// Clear the screen to a dark gray/black
 	ClearColorBuffer(0xFF111111)
@@ -96,6 +104,9 @@ func update() {
 	currentMesh.Rotation.X += 0.01
 	currentMesh.Rotation.Y += 0.01
 	currentMesh.Rotation.Z += 0.01
+
+	var trianglesToRender []TriangleToRender
+	cameraPosition := Vec3{X: 0, Y: 0, Z: 0}
 
 	// Loop over all faces in the mesh
 	for fIndex, face := range currentMesh.Faces {
@@ -106,12 +117,12 @@ func update() {
 			currentMesh.Vertices[face.C],
 		}
 
-		var projectedPoints [3]Vec2
+		var transformedVertices [3]Vec3
 
-		// Transform and project each vertex
+		// Transform each vertex
 		for i, vertex := range vertices {
 			// 1. Scale
-			transformed := vertex.Mult(currentMesh.Scale.X) // Assuming uniform scale
+			transformed := vertex.Mult(currentMesh.Scale.X)
 
 			// 2. Rotate
 			transformed = transformed.RotateX(currentMesh.Rotation.X)
@@ -121,6 +132,31 @@ func update() {
 			// 3. Translate (Push it away from camera)
 			transformed = transformed.Add(currentMesh.Translation)
 
+			transformedVertices[i] = transformed
+		}
+
+		// --- Back-Face Culling ---
+		// 1. Calculate the face normal
+		edge1 := transformedVertices[1].Sub(transformedVertices[0])
+		edge2 := transformedVertices[2].Sub(transformedVertices[0])
+		normal := edge1.Cross(edge2).Normalize()
+
+		// 2. Calculate the camera ray (vector from camera to the face)
+		cameraRay := transformedVertices[0].Sub(cameraPosition)
+
+		// 3. Calculate dot product
+		dot := normal.Dot(cameraRay)
+
+		// If dot > 0, the face is pointing away from the camera (in our left-handed system)
+		// We might need to flip this if it culls front faces!
+		if dot > 0 {
+			continue
+		}
+
+		var projectedPoints [3]Vec2
+
+		// Project each transformed vertex
+		for i, transformed := range transformedVertices {
 			// 4. Project from 3D to 2D
 			projected := Project(transformed)
 
@@ -131,22 +167,40 @@ func update() {
 			projectedPoints[i] = projected
 		}
 
+		// Calculate average depth for Painter's Algorithm
+		avgDepth := (transformedVertices[0].Z + transformedVertices[1].Z + transformedVertices[2].Z) / 3.0
+
 		// Generate a distinct color based on the face index
 		color := uint32(0xFF000000) | (uint32((fIndex*30)%255) << 16) | (uint32((fIndex*40)%255) << 8) | uint32((fIndex*50)%255)
 
+		trianglesToRender = append(trianglesToRender, TriangleToRender{
+			Points:   projectedPoints,
+			Color:    color,
+			AvgDepth: avgDepth,
+		})
+	}
+
+	// --- Painter's Algorithm ---
+	// Sort the triangles by average depth (furthest away is drawn first)
+	sort.Slice(trianglesToRender, func(i, j int) bool {
+		return trianglesToRender[i].AvgDepth > trianglesToRender[j].AvgDepth
+	})
+
+	// Render all sorted triangles
+	for _, t := range trianglesToRender {
 		// Draw the solid, filled triangle
 		DrawFilledTriangle(
-			int(projectedPoints[0].X), int(projectedPoints[0].Y),
-			int(projectedPoints[1].X), int(projectedPoints[1].Y),
-			int(projectedPoints[2].X), int(projectedPoints[2].Y),
-			color,
+			int(t.Points[0].X), int(t.Points[0].Y),
+			int(t.Points[1].X), int(t.Points[1].Y),
+			int(t.Points[2].X), int(t.Points[2].Y),
+			t.Color,
 		)
 		
 		// Draw the wireframe outline on top in dark gray so we can see the edges
 		DrawTriangle(
-			int(projectedPoints[0].X), int(projectedPoints[0].Y),
-			int(projectedPoints[1].X), int(projectedPoints[1].Y),
-			int(projectedPoints[2].X), int(projectedPoints[2].Y),
+			int(t.Points[0].X), int(t.Points[0].Y),
+			int(t.Points[1].X), int(t.Points[1].Y),
+			int(t.Points[2].X), int(t.Points[2].Y),
 			0xFF111111,
 		)
 	}
