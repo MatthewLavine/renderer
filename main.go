@@ -101,7 +101,7 @@ func setup() {
 	zBuffer = make([]float64, WindowWidth*WindowHeight)
 
 	// Load our 3D mesh from disk
-	teapotMesh, err := LoadOBJ("assets/teapot.obj")
+	teapotMesh, err := LoadOBJ("assets/cube.obj")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading OBJ file: %v\n", err)
 	}
@@ -113,14 +113,14 @@ func setup() {
 		Pitch:    0,
 	}
 
-	// Create 9 teapots in a 3x3 grid
+	// Create 9 objects in a 3x3 grid
 	for x := -1; x <= 1; x++ {
 		for y := -1; y <= 1; y++ {
 			entity := &Entity{
 				Mesh:        teapotMesh,
 				Rotation:    Vec3{X: 0, Y: 0, Z: 0},
 				Scale:       Vec3{X: 1, Y: 1, Z: 1},
-				Translation: Vec3{X: float64(x) * 7.0, Y: (float64(y) * 5.0) - 1.5, Z: 15},
+				Translation: Vec3{X: float64(x) * 7.0, Y: (float64(y) * 5.0), Z: 10},
 			}
 			scene = append(scene, entity)
 		}
@@ -231,7 +231,8 @@ func update() []TriangleToRender {
 			defer wg.Done()
 			
 			// Spin the entity around its Y axis
-			e.Rotation.Y += 0.01
+			e.Rotation.Y += 0.005
+			e.Rotation.X += 0.005
 
 			// Calculate World Matrix
 			scaleMatrix := Mat4Scale(e.Scale.X, e.Scale.Y, e.Scale.Z)
